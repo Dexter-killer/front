@@ -27,11 +27,9 @@ app.use(express.static(path.join(__dirname, '/')));
 let subscriptions = [];
 const reminders = new Map();
 
-// Создание HTTP сервера (порт 3000)
 const httpServer = http.createServer(app);
 const ioHttp = socketIo(httpServer, { cors: { origin: "*" } });
 
-// Создание HTTPS сервера (порт 3001)
 let httpsServer;
 try {
     const httpsOptions = {
@@ -40,29 +38,37 @@ try {
     };
     httpsServer = https.createServer(httpsOptions, app);
 } catch (e) {
-    console.log("HTTPS не сконфигурирован (ключи не найдены)");
+    console.log("HTTPS не сконфигурирован");
 }
 
-// Общая логика сокетов
 function setupSocket(io) {
     io.on('connection', (socket) => {
         socket.on('newTask', (task) => {
             socket.broadcast.emit('taskAdded', task);
         });
+        
         socket.on('newReminder', (reminder) => {
+            console.log('Запланировано напоминание:', reminder);
             const delay = reminder.reminderTime - Date.now();
             if (delay <= 0) return;
+
             const timeoutId = setTimeout(() => {
                 const payload = JSON.stringify({
-                    title: '!!! Напоминание',
-                    body: reminder.text,
+                    title: '🔔 Напоминание',
+                    body: reminder.text, // Текст самой заметки
                     reminderId: reminder.id
                 });
+                
+                console.log('Отправка Push для заметки:', reminder.text);
+                
                 subscriptions.forEach(sub => {
-                    webpush.sendNotification(sub, payload).catch(e => {});
+                    webpush.sendNotification(sub, payload).catch(e => {
+                        console.error('Ошибка отправки Push:', e.statusCode);
+                    });
                 });
                 reminders.delete(reminder.id);
             }, delay);
+            
             reminders.set(reminder.id, { timeoutId, text: reminder.text });
         });
     });
@@ -72,6 +78,7 @@ setupSocket(ioHttp);
 
 app.post('/subscribe', (req, res) => {
     subscriptions.push(req.body);
+    console.log('Новая подписка на Push');
     res.status(201).json({ success: true });
 });
 
@@ -83,29 +90,37 @@ app.post('/unsubscribe', (req, res) => {
 app.post('/snooze', (req, res) => {
     const reminderId = parseInt(req.query.reminderId, 10);
     const reminder = reminders.get(reminderId);
+    
     if (reminder) {
         clearTimeout(reminder.timeoutId);
+        console.log('Откладывание заметки:', reminder.text);
         const newDelay = 5 * 60 * 1000;
+        
         const timeoutId = setTimeout(() => {
-            const payload = JSON.stringify({ title: 'Отложенное напоминание', body: reminder.text, reminderId });
+            const payload = JSON.stringify({ 
+                title: '⏰ Отложенное напоминание', 
+                body: reminder.text, 
+                reminderId 
+            });
             subscriptions.forEach(sub => webpush.sendNotification(sub, payload).catch(e => {}));
             reminders.delete(reminderId);
         }, newDelay);
+        
         reminders.set(reminderId, { timeoutId, text: reminder.text });
         res.status(200).json({ message: 'Snoozed' });
     } else {
-        res.status(404).json({ error: 'Not found' });
+        res.status(404).json({ error: 'Reminder not found' });
     }
 });
 
 httpServer.listen(3000, () => {
-    console.log('HTTP Сервер запущен на http://localhost:3000');
+    console.log('HTTP Сервер: http://localhost:3000');
 });
 
 if (httpsServer) {
     const ioHttps = socketIo(httpsServer, { cors: { origin: "*" } });
     setupSocket(ioHttps);
     httpsServer.listen(3001, () => {
-        console.log('HTTPS Сервер запущен на https://localhost:3001');
+        console.log('HTTPS Сервер: https://localhost:3001');
     });
 }

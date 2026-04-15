@@ -37,11 +37,8 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
     const url = new URL(event.request.url);
-
-    // Пропускаем запросы к другим источникам
     if (url.origin !== location.origin) return;
 
-    // Динамические страницы (/content/*) - сначала сеть, потом кэш
     if (url.pathname.startsWith('/content/')) {
         event.respondWith(
             fetch(event.request)
@@ -56,7 +53,6 @@ self.addEventListener('fetch', event => {
                 })
         );
     } else {
-        // Статика - сначала кэш, потом сеть
         event.respondWith(
             caches.match(event.request).then(cachedRes => {
                 return cachedRes || fetch(event.request);
@@ -65,12 +61,21 @@ self.addEventListener('fetch', event => {
     }
 });
 
-// Обработка Push-уведомлений
+// Улучшенная обработка Push-уведомлений
 self.addEventListener('push', event => {
-    let data = { title: 'Новое уведомление', body: '', reminderId: null };
+    console.log('Push получен:', event);
+    let data = { 
+        title: 'Напоминание', 
+        body: 'Пора проверить ваши заметки!', 
+        reminderId: null 
+    };
+
     if (event.data) {
         try {
-            data = event.data.json();
+            const json = event.data.json();
+            data.title = json.title || data.title;
+            data.body = json.body || data.body;
+            data.reminderId = json.reminderId || null;
         } catch (e) {
             data.body = event.data.text();
         }
@@ -80,13 +85,16 @@ self.addEventListener('push', event => {
         body: data.body,
         icon: '/icons/favicon-128x128.png',
         badge: '/icons/favicon-48x48.png',
-        data: { reminderId: data.reminderId }
+        vibrate: [200, 100, 200],
+        data: { reminderId: data.reminderId },
+        actions: []
     };
 
     if (data.reminderId) {
-        options.actions = [
-            { action: 'snooze', title: 'Отложить на 5 минут' }
-        ];
+        options.actions.push({
+            action: 'snooze',
+            title: '⏰ Отложить на 5 минут'
+        });
     }
 
     event.waitUntil(
@@ -94,22 +102,22 @@ self.addEventListener('push', event => {
     );
 });
 
-// Обработка клика по уведомлению
 self.addEventListener('notificationclick', event => {
     const notification = event.notification;
     const action = event.action;
 
     if (action === 'snooze') {
         const reminderId = notification.data.reminderId;
+        // Используем относительный путь, чтобы работало и на HTTP, и на HTTPS
         event.waitUntil(
-            fetch(`http://localhost:3001/snooze?reminderId=${reminderId}`, { method: 'POST' })
+            fetch(`/snooze?reminderId=${reminderId}`, { method: 'POST' })
                 .then(() => notification.close())
-                .catch(err => console.error('Snooze failed:', err))
+                .catch(err => console.error('Ошибка Snooze:', err))
         );
     } else {
         notification.close();
         event.waitUntil(
-            clients.matchAll({ type: 'window' }).then(windowClients => {
+            clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
                 for (let client of windowClients) {
                     if (client.url === '/' && 'focus' in client) return client.focus();
                 }
